@@ -22,6 +22,7 @@ from sklearn.metrics import (
     label_ranking_average_precision_score,
     matthews_corrcoef,
     mean_squared_error,
+    classification_report
 )
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
@@ -69,6 +70,7 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class MultiModalClassificationModel:
@@ -111,6 +113,26 @@ class MultiModalClassificationModel:
             self.args.update_from_dict(args)
         elif isinstance(args, MultiModalClassificationArgs):
             self.args = args
+        
+        if self.args.task_name:
+            self.args.output_dir = os.path.join(self.args.output_dir, self.args.task_name)
+
+        # 设置日志文件路径
+        if not os.path.exists(self.args.output_dir):
+            os.mkdir(self.args.output_dir)
+        log_file = os.path.join(self.args.output_dir, 'application.log')
+        file_handler = logging.FileHandler(log_file)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        # 创建格式化器并将其添加到处理器
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+
+        # 将处理器添加到日志记录器
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
 
         if "sweep_config" in kwargs:
             self.is_sweeping = True
@@ -170,6 +192,7 @@ class MultiModalClassificationModel:
             model_name, config=self.transformer_config, **kwargs
         )
         self.config = MMBTConfig(self.transformer_config, num_labels=self.num_labels)
+        self.config.__dict__['use_return_dict'] = True
         self.results = {}
 
         self.img_encoder = ImageEncoder(self.args)
@@ -558,7 +581,7 @@ class MultiModalClassificationModel:
             self.wandb_run_id = wandb.run.id
 
         if args.fp16:
-            from torch.cuda import amp
+            from torch import amp
 
             scaler = amp.GradScaler()
 
@@ -567,9 +590,11 @@ class MultiModalClassificationModel:
             train_iterator.set_description(
                 f"Epoch {epoch_number} of {args.num_train_epochs}"
             )
+            logger.info(f"Epoch {epoch_number} of {args.num_train_epochs}")
             train_iterator.set_description(
                 f"Epoch {epoch_number + 1} of {args.num_train_epochs}"
             )
+            logger.info(f"Epoch {epoch_number + 1} of {args.num_train_epochs}")
             batch_iterator = tqdm(
                 train_dataloader,
                 desc=f"Running Epoch {epoch_number + 1} of {args.num_train_epochs}",
@@ -582,27 +607,29 @@ class MultiModalClassificationModel:
 
                 inputs = self._get_inputs_dict(batch)
                 if args.fp16:
-                    with amp.autocast():
+                    with amp.autocast('cuda'):
                         outputs = model(**inputs)
                         # model outputs are always tuple in pytorch-transformers (see doc)
-                        loss = outputs[0]
+                        logits = outputs[0]
+
                 else:
                     outputs = model(**inputs)
                     # model outputs are always tuple in pytorch-transformers (see doc)
                     logits = outputs[0]  # Different from default behaviour
-                    loss = self.criterion(logits, labels)
+                loss = self.criterion(logits, labels)
 
                 if args.n_gpu > 1:
                     loss = (
                         loss.mean()
                     )  # mean() to average on multi-gpu parallel training
 
-                current_loss = loss.item()
+                current_loss = loss.item()  
 
                 if show_running_loss:
                     batch_iterator.set_description(
                         f"Epochs {epoch_number + 1}/{args.num_train_epochs}. Running Loss: {current_loss:9.4f}"
                     )
+                    logger.info(f"Epochs {epoch_number + 1}/{args.num_train_epochs}. Running Loss: {current_loss:9.4f}")
 
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
@@ -655,12 +682,12 @@ class MultiModalClassificationModel:
                         output_dir_current = os.path.join(
                             output_dir, "checkpoint-{}".format(global_step)
                         )
-
+                        logger.info(output_dir_current)
                         self.save_model(output_dir_current, model=model)
-
+                    # eval by epoch or step
                     if args.evaluate_during_training and (
-                        args.evaluate_during_training_steps > 0
-                        and global_step % args.evaluate_during_training_steps == 0
+                        args.eval_epoch_period > 0
+                        and global_step % (args.eval_epoch_period * batch_iterator.total) == 0
                     ):
                         # Only evaluate when single GPU otherwise metrics may not average well
                         results, _ = self.eval_model(
@@ -991,11 +1018,11 @@ class MultiModalClassificationModel:
 
         # If data is a tuple,
         # this is for early stopping and first element is data_path and second element is files_list
-        if isinstance(data, tuple):
-            data, files_list = data
+        if isinstance(eval_data, tuple):
+            data, files_list = eval_data
 
         eval_dataset = self.load_and_cache_examples(
-            data,
+            eval_data,
             files_list=files_list,
             image_path=image_path,
             text_label=self.args.text_label,
@@ -1060,7 +1087,7 @@ class MultiModalClassificationModel:
             model = torch.nn.DataParallel(model)
 
         if args.fp16:
-            from torch.cuda import amp
+            from torch import amp
 
         for batch in tqdm(
             eval_dataloader, disable=args.silent or silent, desc="Running Evaluation"
@@ -1233,7 +1260,20 @@ class MultiModalClassificationModel:
                 **extra_metrics,
             }
         else:
-            return {**{"mcc": mcc}, **extra_metrics}
+            cm = confusion_matrix(labels, preds)
+            def calculate_recall_precision_multiclass(cm):
+                recall = np.diag(cm) / np.sum(cm, axis=1)
+                precision = np.diag(cm) / np.sum(cm, axis=0)
+                return recall, precision
+
+            recall, precision = calculate_recall_precision_multiclass(cm)
+            # logger.info(f"Recall for each class: {recall}")
+            # logger.info(f"Precision for each class: {precision}")
+
+            # 使用 classification_report 生成详细报告
+            report = classification_report(labels, preds, output_dict=True, zero_division=0.0)
+            logger.info(f"data num: {report['weighted avg']['support']}; acc: {report['accuracy']}; weighted avg: {report['weighted avg']}")
+            return {**{"mcc": mcc, "data num": report['weighted avg']['support'],"acc": report['accuracy'], "precision": report['weighted avg']['precision'], "recall": report['weighted avg']['recall']}, **extra_metrics}
 
     def predict(self, to_predict, image_path, image_type_extension=None):
         """
@@ -1286,7 +1326,7 @@ class MultiModalClassificationModel:
             model = torch.nn.DataParallel(model)
 
         if args.fp16:
-            from torch.cuda import amp
+            from torch import amp
 
         for batch in tqdm(
             eval_dataloader, disable=args.silent, desc="Running Prediction"
@@ -1296,7 +1336,7 @@ class MultiModalClassificationModel:
             with torch.no_grad():
                 inputs = self._get_inputs_dict(batch)
                 if self.args.fp16:
-                    with amp.autocast():
+                    with amp.autocast('cuda'):
                         outputs = model(**inputs)
                         logits = outputs[0]  # Different from default behaviour
                 else:
@@ -1401,6 +1441,10 @@ class MultiModalClassificationModel:
                 training_progress_scores = {
                     "global_step": [],
                     "mcc": [],
+                    "data num": [],
+                    "acc": [],
+                    "precision": [],
+                    "recall": [],
                     "train_loss": [],
                     "eval_loss": [],
                     **extra_metrics,

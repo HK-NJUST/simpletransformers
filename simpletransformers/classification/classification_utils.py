@@ -773,7 +773,7 @@ POOLING_BREAKDOWN = {
 class ImageEncoder(nn.Module):
     def __init__(self, args):
         super().__init__()
-        model = torchvision.models.resnet152(pretrained=True)
+        model = torchvision.models.resnet50(pretrained=True)
         modules = list(model.children())[:-2]
         self.model = nn.Sequential(*modules)
         self.pool = nn.AdaptiveAvgPool2d(POOLING_BREAKDOWN[args.num_image_embeds])
@@ -824,7 +824,7 @@ class JsonlDataset(Dataset):
                     json.load(
                         open(os.path.join(data_path, l + self.data_type_extension))
                     ),
-                    **{"images": l + image_type_extension},
+                    **{"images": os.path.join(self.images_label, l.replace('.json', '.jpg') + self.image_type_extension)},
                 )
                 for l in files_list
             ]

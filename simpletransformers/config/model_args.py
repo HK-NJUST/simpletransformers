@@ -80,13 +80,14 @@ class ModelArgs:
     quantized_model: bool = False
     reprocess_input_data: bool = True
     save_best_model: bool = True
-    save_eval_checkpoints: bool = True
+    save_eval_checkpoints: bool = False
     save_model_every_epoch: bool = True
     save_optimizer_and_scheduler: bool = True
     save_steps: int = 2000
     scheduler: str = "linear_schedule_with_warmup"
     silent: bool = False
     skip_special_tokens: bool = True
+    # task_name: str = ""
     tensorboard_dir: str = None
     thread_count: int = None
     tokenizer_name: str = None
@@ -534,13 +535,24 @@ class MultiModalClassificationArgs(ModelArgs):
     """
     Model args for a MultiModalClassificationModel
     """
+    # train
+    task_name: str = ""
+    num_train_epochs: int = 10
 
     model_class: str = "MultiModalClassificationModel"
+    num_labels: int = 88
     regression: bool = False
     num_image_embeds: int = 1
+    use_return_dict: bool = True
+
+    # data
+    dataloader_num_workers: int = 1
     text_label: str = "text"
     labels_label: str = "labels"
     images_label: str = "images"
     image_type_extension: str = ""
     data_type_extension: str = ""
     special_tokens_list: list = field(default_factory=list)
+
+    # eval
+    eval_epoch_period: int = 1
