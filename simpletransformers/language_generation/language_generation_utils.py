@@ -1,6 +1,6 @@
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 # Padding text to help Transformer-XL and XLNet with short prompts as proposed by Aman Rusia
 # in https://github.com/rusiaaman/XLNet-gen#methodology

@@ -97,7 +97,7 @@ except ImportError:
 if transformers.__version__ < "4.2.0":
     MBartForConditionalGeneration._keys_to_ignore_on_save = []
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 MODEL_CLASSES = {
     "auto": (AutoConfig, AutoModel, AutoTokenizer),

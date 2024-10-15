@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.WARNING)
 transformers_logger = logging.getLogger("transformers")
 transformers_logger.setLevel(logging.WARNING)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 model_class_map = {

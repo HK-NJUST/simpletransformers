@@ -30,7 +30,7 @@ from datasets import Dataset as HFDataset
 from transformers.models.rag.retrieval_rag import Index
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 # Setting FAISS threads

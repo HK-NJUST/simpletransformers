@@ -24,7 +24,7 @@ from transformers import (
 )
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 if transformers.__version__ < "4.2.0":
     shift_tokens_right = (

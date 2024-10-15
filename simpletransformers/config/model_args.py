@@ -32,6 +32,7 @@ class ModelArgs:
     adafactor_warmup_init: bool = True
     adam_betas: tuple = field(default_factory=lambda: (0.9, 0.999))
     adam_epsilon: float = 1e-8
+    add_mi_layer: bool = False
     best_model_dir: str = "outputs/best_model"
     cache_dir: str = "cache_dir/"
     config: dict = field(default_factory=dict)
@@ -53,6 +54,8 @@ class ModelArgs:
     evaluate_during_training_steps: int = 2000
     evaluate_during_training_verbose: bool = False
     evaluate_each_epoch: bool = True
+    freeze_nlp: bool = False
+    freeze_cv: bool = False
     fp16: bool = True
     gradient_accumulation_steps: int = 1
     learning_rate: float = 4e-5
@@ -102,7 +105,7 @@ class ModelArgs:
     use_multiprocessing_for_evaluation: bool = True
     wandb_kwargs: dict = field(default_factory=dict)
     wandb_project: str = None
-    warmup_ratio: float = 0.06
+    warmup_ratio: float = 0.1
     warmup_steps: int = 0
     weight_decay: float = 0.0
 
@@ -544,9 +547,10 @@ class MultiModalClassificationArgs(ModelArgs):
     regression: bool = False
     num_image_embeds: int = 1
     use_return_dict: bool = True
+    feature_weight: bool = False
 
     # data
-    dataloader_num_workers: int = 1
+    dataloader_num_workers: int = 4
     text_label: str = "text"
     labels_label: str = "labels"
     images_label: str = "images"

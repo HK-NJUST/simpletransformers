@@ -72,7 +72,7 @@ try:
 except ImportError:
     wandb_available = False
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
 ATTR_TO_SPECIAL_TOKEN = {

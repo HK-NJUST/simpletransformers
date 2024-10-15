@@ -34,7 +34,7 @@ from simpletransformers.language_generation.language_generation_utils import (
     PREPROCESSING_FUNCTIONS,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 MAX_LENGTH = int(10000)  # Hardcoded max length to avoid infinite loop
 

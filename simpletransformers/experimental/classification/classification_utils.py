@@ -28,7 +28,7 @@ from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import f1_score, matthews_corrcoef
 from tqdm.auto import tqdm
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 csv.field_size_limit(2147483647)
 
 

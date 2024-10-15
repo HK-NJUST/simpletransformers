@@ -11,7 +11,7 @@ from datasets import load_dataset
 from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizer
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 def encode(data):

@@ -11,6 +11,7 @@ import os
 import random
 import warnings
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from multiprocessing import cpu_count
 
 import numpy as np
@@ -27,6 +28,7 @@ from sklearn.metrics import (
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
 from tqdm.auto import tqdm, trange
 from transformers.optimization import (
     get_constant_schedule,
@@ -45,6 +47,7 @@ from transformers import (
     BertTokenizer,
 )
 from transformers.models.deprecated.mmbt.configuration_mmbt import MMBTConfig
+from transformers.utils.import_utils import PROTOBUF_IMPORT_ERROR
 
 from simpletransformers.classification.classification_utils import (
     ImageEncoder,
@@ -68,9 +71,15 @@ try:
 except ImportError:
     wandb_available = False
 
-
-logger = logging.getLogger(__name__)
+rank = int(os.getenv('RANK', '0'))
+addr = os.getenv('MASTER_ADDR', 'localhost')
+port = os.getenv('MASTER_PORT', '12355')
+world_size = int(os.getenv('WORLD_SIZE', '1'))
+local_rank = int(os.getenv('LOCAL_RANK', 1))
+logger = logging.getLogger("video_tag_logger")
 logger.setLevel(logging.INFO)
+if world_size > 1:
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
 class MultiModalClassificationModel:
@@ -120,7 +129,8 @@ class MultiModalClassificationModel:
         # 设置日志文件路径
         if not os.path.exists(self.args.output_dir):
             os.mkdir(self.args.output_dir)
-        log_file = os.path.join(self.args.output_dir, 'application.log')
+        
+        log_file = os.path.join(self.args.output_dir, f'logs_{rank}.log')
         file_handler = logging.FileHandler(log_file)
 
         console_handler = logging.StreamHandler()
@@ -134,6 +144,7 @@ class MultiModalClassificationModel:
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
+        logger.info(f"WORLD_SIZE: {world_size}, RANK: {rank}, LOCAL_RANK: {local_rank}, port: {port}, addr: {addr}")
         if "sweep_config" in kwargs:
             self.is_sweeping = True
             sweep_config = kwargs.pop("sweep_config")
@@ -193,12 +204,29 @@ class MultiModalClassificationModel:
         )
         self.config = MMBTConfig(self.transformer_config, num_labels=self.num_labels)
         self.config.__dict__['use_return_dict'] = True
+        self.config.__dict__['feature_weight'] = self.args.feature_weight
+        self.config.__dict__['add_mi_layer'] = self.args.add_mi_layer
         self.results = {}
 
         self.img_encoder = ImageEncoder(self.args)
         self.model = MMBTForClassification(
             self.config, self.transformer, self.img_encoder
         )
+
+        # 冻结层
+        if self.args.freeze_nlp:
+            for param in self.transformer.parameters():
+                param.requires_grad = False
+
+            for name, param in self.transformer.named_parameters():
+                logger.info(f"{name}: {param.requires_grad}")
+
+        if self.args.freeze_cv:
+            for param in self.img_encoder.parameters():
+                param.requires_grad = False
+
+        for name, param in self.model.named_parameters():
+            logger.info(f"{name}: {param.requires_grad}")
 
         self.tokenizer = tokenizer_class.from_pretrained(
             model_name, do_lower_case=self.args.do_lower_case, **kwargs
@@ -306,6 +334,8 @@ class MultiModalClassificationModel:
         if self.args.silent:
             show_running_loss = False
 
+        logger.info(self.model)
+        logger.info(self.args)
         if self.args.evaluate_during_training and eval_data is None:
             raise ValueError(
                 "evaluate_during_training is enabled but eval_df is not specified."
@@ -400,9 +430,14 @@ class MultiModalClassificationModel:
         model = self.model
         args = self.args
         multi_label = self.multi_label
-
+        logger.info(f"train dataset num: {len(train_dataset)}")
         tb_writer = SummaryWriter(log_dir=args.tensorboard_dir)
-        train_sampler = RandomSampler(train_dataset)
+        
+        if args.n_gpu > 1:
+            train_sampler = DistributedSampler(train_dataset, rank=rank, num_replicas=world_size)
+        else:
+            train_sampler = RandomSampler(train_dataset)
+
         train_dataloader = DataLoader(
             train_dataset,
             sampler=train_sampler,
@@ -410,7 +445,7 @@ class MultiModalClassificationModel:
             collate_fn=collate_fn,
             num_workers=self.args.dataloader_num_workers,
         )
-
+        logger.info(f"batch size: {train_dataloader.batch_size}; iteration num: {len(train_dataloader)}")
         t_total = (
             len(train_dataloader)
             // args.gradient_accumulation_steps
@@ -551,8 +586,15 @@ class MultiModalClassificationModel:
         else:
             raise ValueError("{} is not a valid scheduler.".format(args.scheduler))
 
+        
         if args.n_gpu > 1:
-            model = torch.nn.DataParallel(model)
+            torch.cuda.set_device(local_rank)
+            # model = torch.nn.DataParallel(model)
+            model = torch.nn.parallel.DistributedDataParallel(
+                model,
+                device_ids=[local_rank], 
+                find_unused_parameters=True
+            )
 
         global_step = 0
         training_progress_scores = None
@@ -581,20 +623,22 @@ class MultiModalClassificationModel:
             self.wandb_run_id = wandb.run.id
 
         if args.fp16:
-            from torch import amp
+            from torch.cuda import amp
 
             scaler = amp.GradScaler()
 
+        
         for _ in train_iterator:
+            epoch_start_time = datetime.now()
             model.train()
+            logger.info(f"Epoch {epoch_number + 1} of {args.num_train_epochs}")
+            logger.info(f"lr: {scheduler.get_last_lr()[0]}")
             train_iterator.set_description(
                 f"Epoch {epoch_number} of {args.num_train_epochs}"
             )
-            logger.info(f"Epoch {epoch_number} of {args.num_train_epochs}")
             train_iterator.set_description(
                 f"Epoch {epoch_number + 1} of {args.num_train_epochs}"
             )
-            logger.info(f"Epoch {epoch_number + 1} of {args.num_train_epochs}")
             batch_iterator = tqdm(
                 train_dataloader,
                 desc=f"Running Epoch {epoch_number + 1} of {args.num_train_epochs}",
@@ -602,12 +646,14 @@ class MultiModalClassificationModel:
                 mininterval=0,
             )
             for step, batch in enumerate(batch_iterator):
+                image_pathes = batch[-1]
+                batch = batch[:-1]
                 batch = tuple(t.to(device) for t in batch)
                 labels = batch[5]
-
+                
                 inputs = self._get_inputs_dict(batch)
                 if args.fp16:
-                    with amp.autocast('cuda'):
+                    with amp.autocast(True):
                         outputs = model(**inputs)
                         # model outputs are always tuple in pytorch-transformers (see doc)
                         logits = outputs[0]
@@ -629,7 +675,7 @@ class MultiModalClassificationModel:
                     batch_iterator.set_description(
                         f"Epochs {epoch_number + 1}/{args.num_train_epochs}. Running Loss: {current_loss:9.4f}"
                     )
-                    logger.info(f"Epochs {epoch_number + 1}/{args.num_train_epochs}. Running Loss: {current_loss:9.4f}")
+                    # logger.info(f"Epochs {epoch_number + 1}/{args.num_train_epochs}. Running Loss: {current_loss:9.4f}")
 
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
@@ -819,6 +865,7 @@ class MultiModalClassificationModel:
                                         )
                         model.train()
 
+            dist.barrier()
             epoch_number += 1
             output_dir_current = os.path.join(
                 output_dir,
@@ -855,7 +902,7 @@ class MultiModalClassificationModel:
                 report = pd.DataFrame(training_progress_scores)
                 report.to_csv(
                     os.path.join(args.output_dir, "training_progress_scores.csv"),
-                    index=False,
+                    index=False
                 )
 
                 if not best_eval_metric:
@@ -941,7 +988,10 @@ class MultiModalClassificationModel:
                                     if not self.args.evaluate_during_training
                                     else training_progress_scores,
                                 )
-
+            epoch_end_time = datetime.now()
+            time_difference = epoch_end_time - epoch_start_time
+            logger.info(f"one epoch spend time: {time_difference}")
+            logger.info(f"epoch-{epoch_number} loss: {tr_loss / global_step}")
         return (
             global_step,
             tr_loss / global_step
@@ -1084,14 +1134,17 @@ class MultiModalClassificationModel:
         model.eval()
 
         if args.n_gpu > 1:
-            model = torch.nn.DataParallel(model)
+            model = torch.nn.parallel.DistributedDataParallel(model)
 
         if args.fp16:
-            from torch import amp
-
+            from torch.cuda import amp
+        all_imgs = []
         for batch in tqdm(
             eval_dataloader, disable=args.silent or silent, desc="Running Evaluation"
         ):
+            image_pathes = batch[-1]
+            all_imgs.extend(image_pathes)
+            batch = batch[:-1]
             batch = tuple(t.to(device) for t in batch)
             labels = batch[5]
             with torch.no_grad():
@@ -1136,7 +1189,7 @@ class MultiModalClassificationModel:
         results.update(result)
 
         output_eval_file = os.path.join(eval_output_dir, "eval_results.txt")
-        with open(output_eval_file, "w") as writer:
+        with open(output_eval_file, "a+") as writer:
             for key in sorted(result.keys()):
                 writer.write("{} = {}\n".format(key, str(result[key])))
 
@@ -1184,8 +1237,9 @@ class MultiModalClassificationModel:
 
         tokenizer = self.tokenizer
         args = self.args
-
-        if not isinstance(data, str):
+        if isinstance(data, list):
+            pass
+        elif not isinstance(data, str):
             if not image_path:
                 raise ValueError(
                     "data is not a str and image_path is not given. image_path must be specified when input is a DF"
@@ -1260,13 +1314,13 @@ class MultiModalClassificationModel:
                 **extra_metrics,
             }
         else:
-            cm = confusion_matrix(labels, preds)
-            def calculate_recall_precision_multiclass(cm):
-                recall = np.diag(cm) / np.sum(cm, axis=1)
-                precision = np.diag(cm) / np.sum(cm, axis=0)
-                return recall, precision
+            # cm = confusion_matrix(labels, preds)
+            # def calculate_recall_precision_multiclass(cm):
+            #     recall = np.diag(cm) / np.sum(cm, axis=1)
+            #     precision = np.diag(cm) / np.sum(cm, axis=0)
+            #     return recall, precision
 
-            recall, precision = calculate_recall_precision_multiclass(cm)
+            # recall, precision = calculate_recall_precision_multiclass(cm)
             # logger.info(f"Recall for each class: {recall}")
             # logger.info(f"Precision for each class: {precision}")
 
@@ -1326,7 +1380,7 @@ class MultiModalClassificationModel:
             model = torch.nn.DataParallel(model)
 
         if args.fp16:
-            from torch import amp
+            from torch.cuda import amp
 
         for batch in tqdm(
             eval_dataloader, disable=args.silent, desc="Running Prediction"
@@ -1336,7 +1390,7 @@ class MultiModalClassificationModel:
             with torch.no_grad():
                 inputs = self._get_inputs_dict(batch)
                 if self.args.fp16:
-                    with amp.autocast('cuda'):
+                    with amp.autocast(True):
                         outputs = model(**inputs)
                         logits = outputs[0]  # Different from default behaviour
                 else:

@@ -1,7 +1,7 @@
 import logging
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 def convert_predictions_to_pytrec_format(

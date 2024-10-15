@@ -41,7 +41,7 @@ from transformers.models.bert.tokenization_bert import (
 from datasets import load_dataset
 from datasets import Dataset as HFDataset
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 class InputExample(object):

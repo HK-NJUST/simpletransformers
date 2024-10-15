@@ -111,7 +111,7 @@ except ImportError:
     wandb_available = False
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 class QuestionAnsweringModel:

@@ -3,11 +3,12 @@ from simpletransformers.classification import MultiModalClassificationModel
 
 
 train_args = { 
-    "task_name": "train_01_bert_res50_cls88_240925",
+    "task_name": "train_02_multilingual_bert_res50_cls88_add_lr_240926",
     "output_dir": "/home/work/video_hk/projects/24q3/simpletransformers/outputs/",
     "overwrite_output_dir": True,
-    "num_train_epochs": 50,
-
+    "num_train_epochs": 100,
+    "warmup_ratio": 0.3,
+    "learning_rate": 1e-4,
     # "use_early_stopping": True,
     # "early_stopping_metric": "mcc",
     # "n_gpu": 2,
@@ -24,8 +25,9 @@ train_args = {
 }
 # time.sleep(50000000000000000000)
 num_labels = 88
+# bert-base-multilingual-uncased, bert-base-uncased
 model = MultiModalClassificationModel(
-    "bert", "bert-base-uncased", num_labels=num_labels, args=train_args
+    "bert", "bert-base-multilingual-uncased", num_labels=num_labels, args=train_args
 )
 # 指定labels未知，支持多个位置的数据
 train_data = ["/home/work/datasets/train03/train_240820_240901/labels", "/home/work/datasets/train02/train_240810_240820/labels", "/home/work/datasets/train01/train_240801_240810/labels"] 

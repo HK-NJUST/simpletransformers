@@ -20,7 +20,7 @@ from datasets import Dataset as HFDataset
 from transformers.models.rag.retrieval_rag import Index
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 def load_hf_dataset(data, context_tokenizer, query_tokenizer, args, evaluate=False):

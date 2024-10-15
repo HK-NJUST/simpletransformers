@@ -37,7 +37,7 @@ try:
 except ImportError:
     wandb_available = False
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 def mean_across_all_tokens(token_vectors):

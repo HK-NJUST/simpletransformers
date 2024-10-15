@@ -19,7 +19,7 @@ from datasets import Dataset as HFDataset
 import datasets
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
 
 
 def preprocess_batch_for_hf_dataset(dataset, tokenizer, args, tokenize_targets=True):

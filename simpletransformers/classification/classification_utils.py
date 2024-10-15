@@ -21,6 +21,7 @@ import json
 import logging
 import linecache
 import os
+from os.path import dirname
 import sys
 from collections import Counter
 from io import open
@@ -40,6 +41,8 @@ from torch.utils.data import Dataset
 from datasets import load_dataset
 from datasets import Dataset as HFDataset
 from tqdm.auto import tqdm
+from tqdm.contrib.concurrent import thread_map
+import threading
 
 try:
     import torchvision
@@ -54,7 +57,8 @@ from copy import deepcopy
 
 csv.field_size_limit(2147483647)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("video_tag_logger")
+logger.setLevel(logging.INFO)
 
 
 class InputExample(object):
@@ -812,7 +816,41 @@ class JsonlDataset(Dataset):
 
         if isinstance(files_list, str):
             files_list = json.load(open(files_list))
-        if isinstance(data_path, str):
+        
+        def load_dataset_thread(sub_files_list):
+            self.data.extend([dict(
+                        json.load(
+                            open(l + self.data_type_extension)
+                        ),
+                        **{"images": l.replace(self.labels_label, self.images_label)
+                                      .replace('.json', '.jpg') + self.image_type_extension},
+                    )
+                    for l in sub_files_list
+            ])
+        if isinstance(data_path, list):
+            self.data = []
+            for data_p in data_path:
+                files_list = [
+                        os.path.join(data_p, f)
+                        for f in os.listdir(data_p)
+                        if f.endswith(self.data_type_extension)
+                    ]
+                logger.info(f"dataset num: {len(files_list)}: {os.path.dirname(data_p)}")
+                if len(files_list) >= 8:
+                    import numpy as np
+                    file_splits = np.array_split(files_list, 8)
+                    thread_map(load_dataset_thread, file_splits, desc="data_load")
+                    # threads = [threading.Thread(target=load_dataset_thread, args=(file_splits[idx],)) for idx in range(8)]
+                    # # 启动线程
+                    # for thread in threads:
+                    #     thread.start()
+                    # # 等待线程完成
+                    # for thread in threads:
+                    #     thread.join()
+                else:
+                    load_dataset_thread(files_list)
+                # self.data.extend()
+        elif isinstance(data_path, str):
             if not files_list:
                 files_list = [
                     f
@@ -862,9 +900,7 @@ class JsonlDataset(Dataset):
         else:
             label = torch.tensor(self.labels.index(self.data[index][self.labels_label]))
 
-        image = Image.open(
-            os.path.join(self.data_dir, self.data[index]["images"])
-        ).convert("RGB")
+        image = Image.open(self.data[index][self.images_label]).convert("RGB")
         image = self.transforms(image)
 
         return {
@@ -873,6 +909,7 @@ class JsonlDataset(Dataset):
             "sentence": sentence,
             "image": image,
             "label": label,
+            "img_path": self.data[index][self.images_label]
         }
 
     def get_label_frequencies(self):
@@ -897,6 +934,7 @@ def collate_fn(batch):
     tgt_tensor = torch.stack([row["label"] for row in batch])
     img_start_token = torch.stack([row["image_start_token"] for row in batch])
     img_end_token = torch.stack([row["image_end_token"] for row in batch])
+    image_path_token = [row["img_path"] for row in batch]
 
     return (
         text_tensor,
@@ -905,6 +943,7 @@ def collate_fn(batch):
         img_start_token,
         img_end_token,
         tgt_tensor,
+        image_path_token,
     )
 
 
